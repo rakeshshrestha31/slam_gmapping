@@ -157,14 +157,16 @@ void SlamGMapping::init()
 
   // The library is pretty chatty
   //gsp_ = new GMapping::GridSlamProcessor(std::cerr);
-  gsp_ = new GMapping::GridSlamProcessor();
-  ROS_ASSERT(gsp_);
+  
+  // recreate a GridSlamProcessor on every initMapper() call 
+  // gsp_ = new GMapping::GridSlamProcessor();
+  // ROS_ASSERT(gsp_);
 
   tfB_ = new tf::TransformBroadcaster();
   ROS_ASSERT(tfB_);
 
-  gsp_laser_ = NULL;
-  gsp_odom_ = NULL;
+  // gsp_laser_ = NULL;
+  // gsp_odom_ = NULL;
 
   got_first_scan_ = false;
   got_map_ = false;
@@ -259,6 +261,7 @@ void SlamGMapping::startLiveSlam()
   sst_ = node_.advertise<nav_msgs::OccupancyGrid>("map", 1, true);
   sstm_ = node_.advertise<nav_msgs::MapMetaData>("map_metadata", 1, true);
   ss_ = node_.advertiseService("dynamic_map", &SlamGMapping::mapCallback, this);
+   service_reset_ = node_.advertiseService("reset_gmapping", &SlamGMapping::resetPoseAndMap, this);
   scan_filter_sub_ = new message_filters::Subscriber<sensor_msgs::LaserScan>(node_, "scan", 5);
   scan_filter_ = new tf::MessageFilter<sensor_msgs::LaserScan>(*scan_filter_sub_, tf_, odom_frame_, 5);
   scan_filter_->registerCallback(boost::bind(&SlamGMapping::laserCallback, this, _1));
@@ -353,12 +356,13 @@ SlamGMapping::~SlamGMapping()
     transform_thread_->join();
     delete transform_thread_;
   }
-
-  delete gsp_;
-  if(gsp_laser_)
-    delete gsp_laser_;
-  if(gsp_odom_)
-    delete gsp_odom_;
+  
+  // these are smart (unique_ptrs) now
+  // delete gsp_;
+  // if(gsp_laser_)
+  //   delete gsp_laser_;
+  // if(gsp_odom_)
+  //   delete gsp_odom_;
   if (scan_filter_)
     delete scan_filter_;
   if (scan_filter_sub_)
@@ -477,25 +481,29 @@ SlamGMapping::initMapper(const sensor_msgs::LaserScan& scan)
     maxRange_ = scan.range_max - 0.01;
   if(!private_nh_.getParam("maxUrange", maxUrange_))
     maxUrange_ = maxRange_;
+  
+  gsp_.reset(new GMapping::GridSlamProcessor());
+  assert(gsp_);
 
   // The laser must be called "FLASER".
   // We pass in the absolute value of the computed angle increment, on the
   // assumption that GMapping requires a positive angle increment.  If the
   // actual increment is negative, we'll swap the order of ranges before
   // feeding each scan to GMapping.
-  gsp_laser_ = new GMapping::RangeSensor("FLASER",
-                                         gsp_laser_beam_count_,
-                                         fabs(scan.angle_increment),
-                                         gmap_pose,
-                                         0.0,
-                                         maxRange_);
+  gsp_laser_.reset(
+      new GMapping::RangeSensor("FLASER",
+                                gsp_laser_beam_count_,
+                                fabs(scan.angle_increment),
+                                gmap_pose,
+                                0.0,
+                                maxRange_));
   ROS_ASSERT(gsp_laser_);
 
   GMapping::SensorMap smap;
-  smap.insert(make_pair(gsp_laser_->getName(), gsp_laser_));
+  smap.insert(make_pair(gsp_laser_->getName(), gsp_laser_.get()));
   gsp_->setSensorMap(smap);
 
-  gsp_odom_ = new GMapping::OdometrySensor(odom_frame_);
+  gsp_odom_.reset(new GMapping::OdometrySensor(odom_frame_));
   ROS_ASSERT(gsp_odom_);
 
 
@@ -572,7 +580,7 @@ SlamGMapping::addScan(const sensor_msgs::LaserScan& scan, GMapping::OrientedPoin
 
   GMapping::RangeReading reading(scan.ranges.size(),
                                  ranges_double,
-                                 gsp_laser_,
+                                 gsp_laser_.get(),
                                  scan.header.stamp.toSec());
 
   // ...but it deep copies them in RangeReading constructor, so we don't
@@ -780,6 +788,16 @@ SlamGMapping::mapCallback(nav_msgs::GetMap::Request  &req,
   }
   else
     return false;
+}
+
+bool
+SlamGMapping::resetPoseAndMap(std_srvs::Trigger::Request &req,
+                              std_srvs::Trigger::Response &res)
+{
+  // this boolean triggers reinitialization of map on the next laser data
+  got_first_scan_ = false;
+  res.success = true;
+  return true;
 }
 
 void SlamGMapping::publishTransform()

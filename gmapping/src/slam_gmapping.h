@@ -19,6 +19,7 @@
 #include "ros/ros.h"
 #include "sensor_msgs/LaserScan.h"
 #include "std_msgs/Float64.h"
+#include "std_srvs/Trigger.h"
 #include "nav_msgs/GetMap.h"
 #include "tf/transform_listener.h"
 #include "tf/transform_broadcaster.h"
@@ -29,6 +30,7 @@
 #include "gmapping/sensor/sensor_base/sensor.h"
 
 #include <boost/thread.hpp>
+#include <boost/move/unique_ptr.hpp>
 
 class SlamGMapping
 {
@@ -46,6 +48,11 @@ class SlamGMapping
     void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan);
     bool mapCallback(nav_msgs::GetMap::Request  &req,
                      nav_msgs::GetMap::Response &res);
+    /**
+     * Handler for reseting the pose/map through ROS service
+     */
+    bool resetPoseAndMap(std_srvs::Trigger::Request &req,
+                         std_srvs::Trigger::Response &res);
     void publishLoop(double transform_publish_period);
 
   private:
@@ -54,13 +61,15 @@ class SlamGMapping
     ros::Publisher sst_;
     ros::Publisher sstm_;
     ros::ServiceServer ss_;
+    ros::ServiceServer service_reset_; ///< service to set whether the gmapping should be active
+
     tf::TransformListener tf_;
     message_filters::Subscriber<sensor_msgs::LaserScan>* scan_filter_sub_;
     tf::MessageFilter<sensor_msgs::LaserScan>* scan_filter_;
     tf::TransformBroadcaster* tfB_;
 
-    GMapping::GridSlamProcessor* gsp_;
-    GMapping::RangeSensor* gsp_laser_;
+    boost::movelib::unique_ptr<GMapping::GridSlamProcessor> gsp_;
+    boost::movelib::unique_ptr<GMapping::RangeSensor> gsp_laser_;
     // The angles in the laser, going from -x to x (adjustment is made to get the laser between
     // symmetrical bounds as that's what gmapping expects)
     std::vector<double> laser_angles_;
@@ -70,7 +79,7 @@ class SlamGMapping
     // We might need to change the order of the scan
     bool do_reverse_range_;
     unsigned int gsp_laser_beam_count_;
-    GMapping::OdometrySensor* gsp_odom_;
+    boost::movelib::unique_ptr<GMapping::OdometrySensor> gsp_odom_;
 
     bool got_first_scan_;
 
